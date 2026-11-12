@@ -106,15 +106,9 @@ DEFAULT_WEIGHTS = {"pred": 1.0, "fit": 4.0, "ahead": 8.0, "ahead_depth": 2}
 def disentangle_algorithm(sequence_entangled, threshold=2.5, weights=None):
     weights = {**DEFAULT_WEIGHTS, **(weights or {})}
     a = np.array(sequence_entangled)
-    n = len(a)
 
-    # All series share one length, and it must divide the number of values.
-    # Try lengths from longest to shortest and keep the first where every series is complete.
-    for length in [L for L in range(n, 1, -1) if n % L == 0] or [1]:
-        s, c = _greedy(a, threshold, length, weights)
-        sizes = np.unique(list(c.values()), return_counts=True)[1]
-        if (sizes == length).all():
-            break
+    # A series grows while its next term is found.
+    s, c = _greedy(a, threshold, len(a), weights)
 
     sequence_disentangled = np.array(s)
     class_disentangled = np.array([c[item] for item in sequence_disentangled])

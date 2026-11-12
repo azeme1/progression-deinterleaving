@@ -55,11 +55,11 @@ if __name__ == "__main__":
     parser.add_argument("--budget", type=float, default=5.0, help="seconds per algorithm and mode")
     parser.add_argument("--algorithms", nargs="+", default=list(ALGORITHMS))
     parser.add_argument("--modes", nargs="+", default=list(MODES))
-    parser.add_argument("--no-noise", action="store_true")
+    parser.add_argument("--noise", type=float, default=1.0, help="noise is uniform in [0, noise)")
     args = parser.parse_args()
 
     seeds = range(args.seeds)
-    noise = {"noise_level_config": (0, 0)} if args.no_noise else {}
+    noise = {"noise_level_config": (0, args.noise)}
     print(f"{'algorithm':10s} {'mode':10s} {'success':>8s} {'runs':>5s} {'mean ms':>9s} {'max ms':>9s}")
     for name in args.algorithms:
         for mode in args.modes:

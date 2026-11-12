@@ -1,19 +1,18 @@
 """Disentangle interleaved progressions with step features and clustering.
 
 Pipeline:
-    1. Features: each value x votes for the steps it could belong to, x / n for
-       n = 1..L. Values of one series all vote near that series' step.
+    1. Features: each difference D between two values votes D / m for m = 1..M.
+       Values of one series all vote near that series' step.
     2. Vote clustering: 1D single-linkage clustering of the votes gives
        candidate steps, ranked by how many distinct values support them.
-    3. Comb scoring: a candidate step d predicts the slots d, 2d, ..., Ld.
-       It scores by how many slots hold a value. Half or double the true step
-       only fills about half the slots, so the true step wins.
+    3. Comb scoring: a candidate step d predicts slots c + d, c + 2d, ... over the
+       whole data range. It scores by filled slots minus empty slots between the
+       first and last filled one, so half the true step scores low.
     4. Value clustering: a k-means style loop where each centroid is a whole
        progression. Values are matched one-to-one to slots, then each series'
        step and offset are refit by least squares, until nothing changes.
-    5. Model selection: the number of series K must divide the number of
-       values. Each K is tried from smallest to largest, and the first one whose
-       residuals all stay within tolerance wins.
+    5. Model selection: K is tried from 1 upwards, and the first K where every
+       value is within tolerance and no series has an empty slot inside wins.
 """
 
 from itertools import combinations
@@ -23,13 +22,14 @@ import numpy as np
 
 # ---------- 1. Features ----------
 
-def step_votes(a, length):
+def step_votes(a, max_divisor, min_step):
     """Each difference between two values votes D / m for every term gap m it could span."""
     i, j = np.triu_indices(len(a), 1)
-    m = np.arange(1, length)
+    m = np.arange(1, max_divisor + 1)
     votes = ((a[j] - a[i])[:, None] / m[None, :]).ravel()
     owners = np.repeat(j, len(m))
-    return votes, owners
+    keep = votes >= min_step
+    return votes[keep], owners[keep]
 
 
 # ---------- 2. Vote clustering ----------
@@ -50,82 +50,90 @@ def cluster_votes(votes, owners, gap):
 
 # ---------- 3. Comb scoring ----------
 
-def comb_fit(a, step, length, tolerance, rounds=3):
+def comb_slots(a, step, offset):
+    """Slot numbers 1..n that cover the data range for a comb x = n * step + offset."""
+    return np.arange(1, int((a.max() - offset) / step) + 2)
+
+
+def comb_fit(a, step, tolerance, rounds=3):
     """Refine a step by fitting the values that land on its comb.
 
-    Returns (step, offset, filled slots).
+    Returns (step, offset, score).
     """
-    n = np.arange(1, length + 1)
     # Start the comb at the first value of the most common phase a mod step.
     phase = a % step
     diff = np.abs(phase[:, None] - phase[None, :])
     close = np.minimum(diff, step - diff) <= tolerance
     members = close[close.sum(axis=1).argmax()]
     d, c = step, a[members].min() - step
-    filled = 0
+    score = 0
     for _ in range(rounds):
-        slots = n * d + c
-        dist = np.abs(a[None, :] - slots[:, None])
+        n = comb_slots(a, d, c)
+        dist = np.abs(a[None, :] - (n * d + c)[:, None])
         nearest = dist.argmin(axis=1)
-        hit = dist[np.arange(length), nearest] <= tolerance
-        filled = int(hit.sum())
-        if filled >= 2:
-            d, c = np.polyfit(n[hit], a[nearest[hit]], 1)
-        elif filled == 1:
-            d = a[nearest[hit]][0] / n[hit][0]
-    return float(d), float(c), filled
+        hit = np.flatnonzero(dist[np.arange(len(n)), nearest] <= tolerance)
+        if len(hit) == 0:
+            return float(d), float(c), 0
+        score = 2 * len(hit) - (hit[-1] - hit[0] + 1)
+        if len(hit) < 2:
+            break
+        d, c = np.polyfit(n[hit], a[nearest[hit]], 1)
+        if d <= tolerance:
+            return float(d), float(c), 0
+    return float(d), float(c), int(score)
 
 
-def candidate_steps(a, length, tolerance, gaps, top, dedupe=0.1):
+def candidate_steps(a, tolerance, gaps, top, max_divisor, min_length, dedupe=0.1):
     """Cluster the step votes at several scales and refine each cluster on its comb.
 
     Fine gaps keep series with nearly equal steps apart. Coarse gaps still catch
     series whose votes are spread out by noise.
     """
-    votes, owners = step_votes(a, length)
+    votes, owners = step_votes(a, max_divisor, 2 * tolerance)
     clusters = []
     for gap in gaps:
         clusters += cluster_votes(votes, owners, gap)
     # Keep clusters supported by enough distinct values to be a real series.
-    clusters = [c for c in clusters if c[1] >= max(2, length // 2)]
+    clusters = [c for c in clusters if c[1] >= min_length]
     clusters.sort(key=lambda c: -c[1])
 
     candidates = []
     for center, _ in clusters:
-        d, c, filled = comb_fit(a, center, length, tolerance)
-        if d <= 0:
+        d, c, score = comb_fit(a, center, tolerance)
+        if score < min_length:
             continue
         if any(abs(d - other[0]) < dedupe for other in candidates):
             continue
-        candidates.append((d, c, filled))
+        candidates.append((d, c, score))
     candidates.sort(key=lambda c: -c[2])
     return candidates[:top]
 
 
 # ---------- 4. Value clustering ----------
 
-def match(a, steps, offsets, length):
+def match(a, steps, offsets):
     """Assign each value to one slot (series, n), greedily by smallest distance.
 
     Then swap pairs of values between series while it lowers the total cost.
     """
-    k = len(steps)
-    n = np.arange(1, length + 1)
-    slots = (n[None, :] * steps[:, None] + offsets[:, None]).ravel()
+    slot_series, slot_n = [], []
+    for s, (d, c) in enumerate(zip(steps, offsets)):
+        n = comb_slots(a, d, c)
+        slot_series.append(np.full(len(n), s))
+        slot_n.append(n)
+    slot_series, slot_n = np.concatenate(slot_series), np.concatenate(slot_n)
+    slots = slot_n * steps[slot_series] + offsets[slot_series]
     cost = (a[:, None] - slots[None, :]) ** 2
 
-    labels = np.full(len(a), -1)
-    positions = np.zeros(len(a), dtype=int)
-    used_point = np.zeros(len(a), bool)
+    slot_of = np.full(len(a), -1)
     used_slot = np.zeros(len(slots), bool)
     for flat in np.argsort(cost, axis=None):
         i, s = divmod(int(flat), len(slots))
-        if used_point[i] or used_slot[s]:
+        if slot_of[i] >= 0 or used_slot[s]:
             continue
-        used_point[i] = used_slot[s] = True
-        labels[i], positions[i] = s // length, s % length + 1
+        slot_of[i] = s
+        used_slot[s] = True
 
-    slot_of = labels * length + positions - 1
     improved = True
     while improved:
         improved = False
@@ -135,35 +143,45 @@ def match(a, steps, offsets, length):
                 if cost[i, sj] + cost[j, si] + 1e-12 < cost[i, si] + cost[j, sj]:
                     slot_of[i], slot_of[j] = sj, si
                     improved = True
-    labels, positions = slot_of // length, slot_of % length + 1
-    return labels, positions
+    return slot_series[slot_of], slot_n[slot_of]
 
 
-def refit(a, labels, positions, k):
-    steps, offsets = np.zeros(k), np.zeros(k)
-    for s in range(k):
+def refit(a, labels, positions, steps, offsets):
+    steps, offsets = steps.copy(), offsets.copy()
+    for s in range(len(steps)):
         mask = labels == s
-        steps[s], offsets[s] = np.polyfit(positions[mask], a[mask], 1)
+        if mask.sum() >= 2:
+            steps[s], offsets[s] = np.polyfit(positions[mask], a[mask], 1)
     return steps, offsets
 
 
-def comb_kmeans(a, steps, offsets, length, max_iter=20):
-    k = len(steps)
+def comb_kmeans(a, steps, offsets, tolerance, max_iter=20):
     labels = None
     for _ in range(max_iter):
-        new_labels, positions = match(a, steps, offsets, length)
-        steps, offsets = refit(a, new_labels, positions, k)
+        new_labels, positions = match(a, steps, offsets)
+        steps, offsets = refit(a, new_labels, positions, steps, offsets)
+        if (steps <= tolerance).any():
+            break
         if labels is not None and (new_labels == labels).all():
             break
         labels = new_labels
-    residual = a - (positions * steps[labels] + offsets[labels])
-    return labels, positions, residual
+    residual = a - (positions * steps[new_labels] + offsets[new_labels])
+    return new_labels, positions, residual
+
+
+def no_holes(labels, positions, k, min_length):
+    """Every series is a run of consecutive slots with at least min_length values."""
+    for s in range(k):
+        p = positions[labels == s]
+        if len(p) < min_length or p.max() - p.min() + 1 != len(p):
+            return False
+    return True
 
 
 # ---------- 5. Model selection ----------
 
-def fit_k(a, k, length, tolerance, gaps, top):
-    candidates = candidate_steps(a, length, tolerance, gaps, top)
+def fit_k(a, k, tolerance, gaps, top, max_divisor, min_length):
+    candidates = candidate_steps(a, tolerance, gaps, top, max_divisor, min_length)
     if len(candidates) < k:
         return None
 
@@ -171,14 +189,16 @@ def fit_k(a, k, length, tolerance, gaps, top):
     for combo in combinations(candidates, k):
         steps = np.array([c[0] for c in combo])
         offsets = np.array([c[1] for c in combo])
-        labels, positions, residual = comb_kmeans(a, steps, offsets, length)
+        labels, positions, residual = comb_kmeans(a, steps, offsets, tolerance)
         cost = float((residual ** 2).sum())
-        if best is None or cost < best[0]:
-            best = (cost, labels, positions, np.abs(residual).max())
+        fits = np.abs(residual).max() <= tolerance and no_holes(labels, positions, k, min_length)
+        if best is None or (fits, -cost) > (best[0], -best[1]):
+            best = (fits, cost, labels, positions)
     return best
 
 
-def disentangle_algorithm(sequence_entangled, tolerance=1.5, vote_gaps=(0.15, 0.3, 0.6), top=8, min_length=2):
+def disentangle_algorithm(sequence_entangled, tolerance=1.5, vote_gaps=(0.15, 0.3, 0.6), top=8,
+                          max_divisor=10, min_length=3, max_k=8):
     """Split a sorted mix of arithmetic progressions back into its series.
 
     Returns, matching the original function:
@@ -191,20 +211,18 @@ def disentangle_algorithm(sequence_entangled, tolerance=1.5, vote_gaps=(0.15, 0.
     if total == 0:
         return np.array([]), np.array([], dtype=int), np.array([], dtype=int)
 
-    chosen = None  # (worst residual, labels, positions)
-    for k in range(1, total + 1):
-        if total % k or total // k < min_length:
-            continue
-        result = fit_k(a, k, total // k, tolerance, vote_gaps, top)
+    chosen = None  # (cost, labels, positions)
+    for k in range(1, min(max_k, total // min_length) + 1):
+        result = fit_k(a, k, tolerance, vote_gaps, top, max_divisor, min_length)
         if result is None:
             continue
-        cost, labels, positions, worst = result
-        if worst <= tolerance:
-            chosen = (worst, labels, positions)
+        fits, cost, labels, positions = result
+        if fits:
+            chosen = (cost, labels, positions)
             break
         # No K fits yet: remember the closest one.
-        if chosen is None or worst < chosen[0]:
-            chosen = (worst, labels, positions)
+        if chosen is None or cost < chosen[0]:
+            chosen = (cost, labels, positions)
 
     if chosen is None:
         labels, positions = np.arange(total), np.ones(total, dtype=int)

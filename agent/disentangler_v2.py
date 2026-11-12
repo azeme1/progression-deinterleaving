@@ -17,13 +17,14 @@ def _cost(a, labels, positions, k):
     return total
 
 
-def _search(a, k, length, tolerance, max_nodes):
-    """Depth-first search for ways to split `a` into `k` progressions of `length` terms.
+def _search(a, k, tolerance, min_length, max_nodes):
+    """Depth-first search for ways to split `a` into `k` progressions of any length >= min_length.
 
     A new series always starts at the smallest unassigned value. Each next term
     is predicted from the line fitted to the terms found so far, and every
     unassigned value within `tolerance` of the prediction is tried, closest
-    first. Returns the complete split with the lowest residual cost, or None.
+    first. A series may also end once it has min_length terms.
+    Returns the complete split with the lowest residual cost, or None.
     """
     labels = np.full(len(a), -1)
     positions = np.zeros(len(a), dtype=int)
@@ -33,18 +34,6 @@ def _search(a, k, length, tolerance, max_nodes):
     def extend(series, ns, xs):
         nodes[0] += 1
         if nodes[0] > max_nodes:
-            return
-
-        if len(ns) == length:
-            if series + 1 == k:
-                cost = _cost(a, labels, positions, k)
-                if cost < best["cost"]:
-                    best.update(cost=cost, labels=labels.copy(), positions=positions.copy())
-                return
-            first = np.flatnonzero(labels == -1)[0]
-            labels[first], positions[first] = series + 1, 1
-            extend(series + 1, [1], [a[first]])
-            labels[first] = -1
             return
 
         n = len(ns) + 1
@@ -62,6 +51,21 @@ def _search(a, k, length, tolerance, max_nodes):
             extend(series, ns + [n], xs + [a[idx]])
             labels[idx] = -1
 
+        # End this series here.
+        if len(ns) < min_length:
+            return
+        if len(free) == 0:
+            if series + 1 == k:
+                cost = _cost(a, labels, positions, k)
+                if cost < best["cost"]:
+                    best.update(cost=cost, labels=labels.copy(), positions=positions.copy())
+            return
+        if series + 1 < k:
+            first = free[0]
+            labels[first], positions[first] = series + 1, 1
+            extend(series + 1, [1], [a[first]])
+            labels[first] = -1
+
     labels[0], positions[0] = 0, 1
     extend(0, [1], [a[0]])
 
@@ -70,14 +74,13 @@ def _search(a, k, length, tolerance, max_nodes):
     return best["labels"], best["positions"]
 
 
-def disentangle_algorithm(sequence_entangled, tolerance=3.0, min_length=2, max_nodes=20000):
+def disentangle_algorithm(sequence_entangled, tolerance=3.0, min_length=3, max_nodes=20000):
     """Split a sorted mix of arithmetic progressions back into its series.
 
-    Each hidden series is x_n = start + n * step + noise for n = 1..L, and all series
-    share the same length L. The input is every value pooled and sorted.
+    Each hidden series is x_n = start + n * step + noise for n = 1..L_k.
+    The input is every value pooled and sorted.
 
-    The number of series K must divide the number of values, so each divisor is
-    tried from smallest to largest, and the first K that splits cleanly wins.
+    The number of series K is tried from 1 upwards, and the first K that splits cleanly wins.
 
     Returns, matching the original function:
         sequence_disentangled: values grouped by series, each in term order.
@@ -90,10 +93,8 @@ def disentangle_algorithm(sequence_entangled, tolerance=3.0, min_length=2, max_n
         return np.array([]), np.array([], dtype=int), np.array([], dtype=int)
 
     result = None
-    for k in range(1, total + 1):
-        if total % k or total // k < min_length:
-            continue
-        result = _search(a, k, total // k, tolerance, max_nodes)
+    for k in range(1, total // min_length + 1):
+        result = _search(a, k, tolerance, min_length, max_nodes)
         if result is not None:
             break
 
