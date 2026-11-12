@@ -9,6 +9,7 @@ from human.disentangler_v2 import disentangle_algorithm as human_v2
 from agent.disentangler_v2 import disentangle_algorithm as agent_v2
 from agent.disentangler_v3 import disentangle_algorithm as agent_v3
 from agent.disentangler_v4 import disentangle_algorithm as agent_v4
+from hybrid.disentangler_kmeans import disentangle_algorithm as hybrid_kmeans
 
 ALGORITHMS = {
     "human_v1": human_v1,
@@ -16,6 +17,7 @@ ALGORITHMS = {
     "agent_v2": agent_v2,
     "agent_v3": agent_v3,
     "agent_v4": agent_v4,
+    "hybrid_kmeans": hybrid_kmeans,
 }
 
 MODES = {
@@ -60,8 +62,8 @@ if __name__ == "__main__":
 
     seeds = range(args.seeds)
     noise = {"noise_level_config": (0, args.noise)}
-    print(f"{'algorithm':10s} {'mode':10s} {'success':>8s} {'runs':>5s} {'mean ms':>9s} {'max ms':>9s}")
+    print(f"{'algorithm':14s} {'mode':10s} {'success':>8s} {'runs':>5s} {'mean ms':>9s} {'max ms':>9s}")
     for name in args.algorithms:
         for mode in args.modes:
             rate, runs, mean_ms, max_ms = run(ALGORITHMS[name], seeds, MODES[mode], args.budget, **noise)
-            print(f"{name:10s} {mode:10s} {rate:8.1%} {runs:5d} {mean_ms:9.2f} {max_ms:9.2f}", flush=True)
+            print(f"{name:14s} {mode:10s} {rate:8.1%} {runs:5d} {mean_ms:9.2f} {max_ms:9.2f}", flush=True)
