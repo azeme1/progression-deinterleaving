@@ -73,12 +73,20 @@ def _greedy(a, threshold, length, weights):
         ns, xs = [1], [a[j]]
 
         for i in range(2, length + 1):
-            # Candidates: free values close to the predicted next term.
-            near = np.flatnonzero(free & (np.abs(a - (last + step)) < threshold))
-            if len(near) == 0:
-                break
-
-            costs = [_cost(a, free, k, ns, xs, last, step, length, threshold, weights) for k in near]
+            if i == 2:
+                # The start is unknown, so any later value can be the second term.
+                # Pick the one whose whole chain lands best on free values.
+                near = np.flatnonzero(free & (a > first))
+                if len(near) == 0:
+                    break
+                costs = [_look_ahead(a, free & (np.arange(len(a)) != k), [1, 2], [first, a[k]],
+                                     length, length, threshold) for k in near]
+            else:
+                # Candidates: free values close to the predicted next term.
+                near = np.flatnonzero(free & (np.abs(a - (last + step)) < threshold))
+                if len(near) == 0:
+                    break
+                costs = [_cost(a, free, k, ns, xs, last, step, length, threshold, weights) for k in near]
             k = near[int(np.argmin(costs))]
 
             free[k] = False

@@ -2,9 +2,7 @@ import numpy as np
 
 
 def _fit(ns, xs):
-    """Fit x = d * n + c. With one point, assume c = 0."""
-    if len(ns) == 1:
-        return xs[0] / ns[0], 0.0
+    """Fit x = d * n + c."""
     d, c = np.polyfit(ns, xs, 1)
     return d, c
 
@@ -50,13 +48,16 @@ def _search(a, k, length, tolerance, max_nodes):
             return
 
         n = len(ns) + 1
-        d, c = _fit(ns, xs)
-        predicted = n * d + c
         free = np.flatnonzero(labels == -1)
-        distance = np.abs(a[free] - predicted)
-        for idx in free[np.argsort(distance)]:
-            if abs(a[idx] - predicted) > tolerance:
-                break
+        if n == 2:
+            # The start is unknown, so any later value can be the second term.
+            candidates = free[a[free] > xs[0]]
+        else:
+            d, c = _fit(ns, xs)
+            distance = np.abs(a[free] - (n * d + c))
+            candidates = free[np.argsort(distance)]
+            candidates = candidates[np.sort(distance) <= tolerance]
+        for idx in candidates:
             labels[idx], positions[idx] = series, n
             extend(series, ns + [n], xs + [a[idx]])
             labels[idx] = -1
@@ -72,7 +73,7 @@ def _search(a, k, length, tolerance, max_nodes):
 def disentangle_algorithm(sequence_entangled, tolerance=3.0, min_length=2, max_nodes=20000):
     """Split a sorted mix of arithmetic progressions back into its series.
 
-    Each hidden series is x_n = n * step + noise for n = 1..L, and all series
+    Each hidden series is x_n = start + n * step + noise for n = 1..L, and all series
     share the same length L. The input is every value pooled and sorted.
 
     The number of series K must divide the number of values, so each divisor is

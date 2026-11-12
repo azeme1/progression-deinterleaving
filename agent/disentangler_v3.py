@@ -24,10 +24,11 @@ import numpy as np
 # ---------- 1. Features ----------
 
 def step_votes(a, length):
-    """Each value votes x / n for every term index n it could hold."""
-    n = np.arange(1, length + 1)
-    votes = (a[:, None] / n[None, :]).ravel()
-    owners = np.repeat(np.arange(len(a)), length)
+    """Each difference between two values votes D / m for every term gap m it could span."""
+    i, j = np.triu_indices(len(a), 1)
+    m = np.arange(1, length)
+    votes = ((a[j] - a[i])[:, None] / m[None, :]).ravel()
+    owners = np.repeat(j, len(m))
     return votes, owners
 
 
@@ -55,7 +56,12 @@ def comb_fit(a, step, length, tolerance, rounds=3):
     Returns (step, offset, filled slots).
     """
     n = np.arange(1, length + 1)
-    d, c = step, 0.0
+    # Start the comb at the first value of the most common phase a mod step.
+    phase = a % step
+    diff = np.abs(phase[:, None] - phase[None, :])
+    close = np.minimum(diff, step - diff) <= tolerance
+    members = close[close.sum(axis=1).argmax()]
+    d, c = step, a[members].min() - step
     filled = 0
     for _ in range(rounds):
         slots = n * d + c
