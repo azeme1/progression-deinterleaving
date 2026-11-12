@@ -16,6 +16,12 @@ def test_example():
     assert p.tolist() == [0, 1, 0, 0, 1, 0, 1, 1]
 
 
+def test_example_offset():
+    x = [30.5, 47.0, 56.0, 81.5, 87.0, 107.0, 127.0, 167.0]
+    _, _, p = disentangle_algorithm(x)
+    assert p.tolist() == [0, 1, 0, 0, 1, 0, 1, 1]
+
+
 @pytest.mark.parametrize("mode", MODES)
 def test_generator(mode):
     np.random.seed(0)
@@ -45,9 +51,10 @@ def test_human_v2_single_series(seed, mode):
 
 
 @pytest.mark.parametrize("name", ALGORITHMS)
-def test_speed(name):
+@pytest.mark.parametrize("mode", MODES)
+def test_speed(name, mode):
     np.random.seed(0)
-    x, _ = generate_sample()
+    x, _ = generate_sample(offset_config=MODES[mode])
     t0 = time.perf_counter()
     ALGORITHMS[name](x)
     assert time.perf_counter() - t0 < 5.0
