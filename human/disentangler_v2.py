@@ -115,14 +115,21 @@ def _neighbor_cost(x, labels, steps):
     return C
 
 
-def _compact(labels, steps, tol, min_len, merge=0.3):
+def _can_merge(P, Q, d):
+    """Two series with close steps put their values in near pairs; one series does not."""
+    gaps = np.diff(np.sort(np.r_[P, Q]))
+    return (gaps < d / 4).sum() <= min(len(P), len(Q)) // 2
+
+
+def _compact(x, labels, steps, tol, min_len, merge=0.3):
     """Merge series with equal steps, drop short ones (their values become -1)."""
     order = np.argsort(steps)
     target = -np.ones(len(steps), int)
     kept = []
     for k in order:
         for j, s in enumerate(kept):
-            if abs(steps[k] - steps[s]) < max(0.015 * steps[s], merge):
+            if (abs(steps[k] - steps[s]) < max(0.015 * steps[s], merge)
+                    and _can_merge(x[labels == k], x[labels == s], steps[s])):
                 target[k] = j
                 break
         else:
@@ -158,7 +165,7 @@ def disentangle(x, max_divisor=10, min_len=3, iters=25, tol_floor=0.2):
     steps = np.array([_gap_step(x[labels == k], np.median(np.diff(np.sort(x[labels == k]))))
                       for k in range(labels.max() + 1)])
     tol = 0.25 * steps
-    labels, steps, tol = _compact(labels, steps, tol, min_len)
+    labels, steps, tol = _compact(x, labels, steps, tol, min_len)
 
     for _ in range(iters):
         if len(steps) == 0:
@@ -186,7 +193,7 @@ def disentangle(x, max_divisor=10, min_len=3, iters=25, tol_floor=0.2):
                     steps = np.r_[steps, d]
                     tol = np.r_[tol, 0.25 * d]
 
-        new, steps, tol = _compact(new, steps, tol, min_len, merge=max(0.3, 2 * (sigma or 0)))
+        new, steps, tol = _compact(x, new, steps, tol, min_len, merge=max(0.3, 2 * (sigma or 0)))
         if np.array_equal(new, labels):
             break
         labels = new
